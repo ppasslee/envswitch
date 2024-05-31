@@ -17,17 +17,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-
 declare -r config_dir="${HOME}/.config/envswitch"
 shopt -s nullglob
 
-
 function export_environment()
 {
-	if [ -n "${ENVSWITCH_PROFILE}" ]
+	if [ -n "${ENVSWITCH_PROFILES}" ]
 	then
-		sed -e 's/^\([^#]\+\)/export \1/g' \
-			"${config_dir}/${ENVSWITCH_PROFILE}.conf"
+		for profile in ${ENVSWITCH_PROFILES}
+		do
+			sed -e 's/^\([^#]\+\)/export \1/g' \
+				"${config_dir}/${profile}.conf"
+		done
 	else
 		echo "No environment loaded."
 		exit 1
@@ -36,7 +37,7 @@ function export_environment()
 
 function print_help()
 {
-	cat <<- EOF
+	cat <<-EOF
 	Usage: $(basename "${0}") OPTION
 
 	-i      initialize (for use with eval)
@@ -50,30 +51,39 @@ function print_help()
 
 function init()
 {
-	cat <<- EOF
+	cat <<-EOF
 	envreset()
 	{
-	    local -r env_file="${config_dir}/\${ENVSWITCH_PROFILE}.conf"
-	    if [ -n "\${ENVSWITCH_PROFILE}" ]
-	    then
-	        for line in \$(grep -v '^#' "\${env_file}")
-	        do
-	            unset "\${line%=*}"
-	        done
-	        unset ENVSWITCH_PROFILE
-	        if [ -n "\${ENVSWITCH_OLDPS1}" ]
-	        then
-	            export PS1="\${ENVSWITCH_OLDPS1}"
-	            unset ENVSWITCH_OLDPS1
-	        fi
-	    fi
+		echo "Resetting environments: \${ENVSWITCH_PROFILES}"  # Debugging line
+		if [ -n "\${ENVSWITCH_PROFILES}" ]
+		then
+			for profile in \${ENVSWITCH_PROFILES}
+			do
+				echo "Resetting profile: \${profile}"  # Debugging line
+				env_file="${config_dir}/\${profile}.conf"
+				while IFS= read -r line; do
+					[[ \$line =~ ^#.*$ ]] && continue
+					echo "Unsetting \${line%=*}"  # Debugging line
+					unset "\${line%=*}"
+				done < "\${env_file}"
+			done
+			unset ENVSWITCH_PROFILES
+			if [ -n "\${ENVSWITCH_OLDPS1}" ]
+			then
+				export PS1="\${ENVSWITCH_OLDPS1}"
+				unset ENVSWITCH_OLDPS1
+			else
+				export PS1="\${PS1#*(}"
+				export PS1="\${PS1%)}"
+			fi
+		fi
 	}
 
 	envrunning()
 	{
-		if [ -n "\${ENVSWITCH_PROFILE}" ]
+		if [ -n "\${ENVSWITCH_PROFILES}" ]
 		then
-			echo "\${ENVSWITCH_PROFILE}"
+			echo "\${ENVSWITCH_PROFILES}"
 		else
 			echo "No environment loaded." 1>&2
 		fi
@@ -83,25 +93,28 @@ function init()
 	for env_file in "${config_dir}"/*.conf
 	do
 		env_file_base="$(basename "${env_file%.conf}")"
-		cat <<- EOF
+		cat <<-EOF
 		${env_file_base}()
 		{
-		    local -r env_file="${env_file}"
-		    if [ -n "\${ENVSWITCH_PROFILE}" ]
-		    then
-		        envreset
-		    fi
-		    export ENVSWITCH_PROFILE='${env_file_base}'
-		    for line in \$(grep -v '^#' "\${env_file}")
-		    do
-		        eval export \${line}
-		    done
+			local env_file="${env_file}"
+			echo "Loading profile: ${env_file_base}"  # Debugging line
+			ENVSWITCH_PROFILES="\${ENVSWITCH_PROFILES} ${env_file_base}"
+			ENVSWITCH_PROFILES=\$(echo \${ENVSWITCH_PROFILES} | xargs -n1 | sort -u | xargs)  # Remove leading/trailing spaces and duplicates
+			export ENVSWITCH_PROFILES
+			for line in \$(grep -v '^#' "\${env_file}")
+			do
+				echo "Setting \${line}"  # Debugging line
+				eval export \${line}
+			done
 		EOF
 		if [ "${1}" = "set_prompt" ]
 		then
-			cat <<- EOF
-			    export ENVSWITCH_OLDPS1="\${PS1}"
-			    export PS1="(${env_file_base}) \${PS1}"
+			cat <<-EOF
+				if [ -z "\${ENVSWITCH_OLDPS1}" ]
+				then
+					export ENVSWITCH_OLDPS1="\${PS1}"
+				fi
+				export PS1="(${env_file_base}) \${PS1}"
 			EOF
 		fi
 		echo "}"
@@ -118,9 +131,14 @@ function list_environments()
 
 function show_environment()
 {
-	if [ -n "${ENVSWITCH_PROFILE}" ]
+	if [ -n "${ENVSWITCH_PROFILES}" ]
 	then
-		cat "${config_dir}/${ENVSWITCH_PROFILE}.conf"
+		for profile in ${ENVSWITCH_PROFILES}
+		do
+			echo "Profile: ${profile}"
+			grep -v '^#' "${config_dir}/${profile}.conf"
+			echo
+		done
 	else
 		echo "No environment loaded."
 		exit 1
